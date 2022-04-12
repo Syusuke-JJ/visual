@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+    /* 外面的灰色框框 */
+    #my_dataviz {
+      margin: 5px;
+      padding: 20px;
+      width: 960px;
+      border: 1px solid #ccc;
+    }
+	#analyze {
+	  margin: 5px;
+      padding: 20px;
+      width: 1400px;
+      border: 1px solid #ccc;
+	}
+    /* 设置各级标题style */
+    body, h1, p {
+      margin: 0;
+      padding: 0;
+      font-family: 'Source Sans Pro', sans-serif;
+      font-size: 1em;
+      color: #333;
+      font-weight: 400;
+    }
+    h1 {
+      line-height: 1em;
+      font-size: 1.75em;
+      font-weight: 900;
+      color: #000;
+    }
+    .links line {
+      stroke: #999;
+      stroke-opacity: 0.6;
+    }
+
+    .nodes circle {
+      stroke: #fff;
+      stroke-width: 1.5px;
+    }
+
+    .node text {
+      pointer-events: none;
+      font: 15px sans-serif;
+    }
+    /* 提示框 */
+    .tooltip {
+      position: absolute;
+      padding: 7px;
+      font-size: 0.9em;
+      pointer-events: none;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+
+      /* 添加阴影效果 */
+      -moz-box-shadow:    3px 3px 10px 0px rgba(0, 0, 0, 0.25);
+      -webkit-box-shadow: 3px 3px 10px 0px rgba(0, 0, 0, 0.25);
+      box-shadow:         3px 3px 10px 0px rgba(0, 0, 0, 0.25);
+    }
+
+    .tooltip p {
+      margin: 0;
+      padding: 0;
+    }
+    .tooltip table {
+      margin: 0;
+      padding: 0;
+      border-collapse: collapse;
+    }
+    path.hull {
+      fill: lightsteelblue;
+      fill-opacity: 0.3;
+    }
+
+</style>
+<!-- 加载d3.v6 -->
+<script src="https://d3js.org/d3.v6.js"></script>
+
+<body>
+<!-- 创建一个div -->
+<div id="my_dataviz">
+  <h1>Social Network</h1>
+</div>
+<div id="analyze">
+  <h1>Analyze the Users</h1>
+</div>
+
+<script>
+
+  // 设置画布大小-四周留间距
+  let margin = {top: 10, right: 30, bottom: 30, left: 40},
+    width = 960 - margin.left - margin.right,
+    height = 600 - margin.top - margin.bottom;
+
+  // 创建SVG元素并添加到map中
+  let svg = d3.select("#my_dataviz")
+    .append("svg")
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom)
+  
+  // 平行坐标图，表示各个用户的属性
+  let width2 = 1000,
+    height2 = 600,
+	margin2 = 80;
+
+  let svg2 = d3.select("#analyze")
+    .append("svg")
+    .attr("width", width2 * 1.5)
+    .attr("height", height2 + margin.top + margin.bottom)
+  
+  let group2 = svg2.append("g");
+  let legend2 = svg2.append("g");
+
+	// 定义颜色函数
+ 	let color = d3.scaleOrdinal(d3.schemeCategory10);
+
+	let tooltip = d3.select("body").append("div")
+		.attr("class", "tooltip")
+		.style("opacity", 0);
+
+  	// 读取数据，该数据是社交网络课程中用到的社交网络数据的一部分
+  	d3.json("data.json").then( function( graph ) {
+			
+	//每个用户的数据column
+	let columns = ['id','group','sex','fans_count','follows_count','weibos_count','ageGroup'];
+
+	graph.columns = columns;
+
+	let dimensions = ['fans_count','follows_count','weibos_count']
+
+	// 创建一个力学模拟器
+  	let simulation = d3.forceSimulation(graph.nodes)
+		// 连接力
+    	.force("link", d3.forceLink(graph.links)
+            .id(d => d.id) 	// 每个节点的id的获取方式
+            .strength(d => d.source.group === d.target.group ? 1 : 0.1))
+		// 万有引力
+    	.force("charge", d3.forceManyBody().strength(-1.5))
+		.force('center', d3.forceCenter(width/2,height/2));
+
+		// 计算凸壳集合的函数
+		function convexHulls(nodes) {
+			
+			let offset = 15; // 可以控制区域边界大小
+			let hulls = {};
+
+			for (let k=0; k<nodes.length; ++k) {
+				let n = nodes[k];
+				if (n.size) continue;
+				let i = n.group, l = hulls[i] || (hulls[i] = []);
+
+				// l 记录了一个点的正方形区域的四个顶点
+				l.push([n.x-offset, n.y-offset]);
+				l.push([n.x-offset, n.y+offset]);
+				l.push([n.x+offset, n.y-offset]);
+				l.push([n.x+offset, n.y+offset]);
+
+			}
+
+		// 创建凸壳集合
+		let hullset = [];
+		for (i in hulls) {
+				// d3.polygonHull可以求多边形最外层的点，返回的顺序是顺时针
+				hullset.push({group: i, path: d3.polygonHull(hulls[i])});
+			}
+			return hullset;
+		}
+		
+		// d3.line.curve()方法用于绘制一条曲线
+		let curve = d3.line().curve(d3.curveCardinalClosed.tension(0.01));
+
+		// 分类绘制凸壳
+		function drawCluster(d) {
+			//返回曲线路径
+			return curve(d.path);
+		}
+
+		//定义凸壳组件
+		let hulls = svg.append("g")
+			.selectAll("path.hull")
+			.data(convexHulls(graph.nodes))
+			.enter()
+			.append("path")
+			.attr("class", "hull")
+			.attr("d", drawCluster)
+			.style("fill", function(d) {console.log(d); return color(d.group); });
+
+		// 定义人物节点之间连线的信息
+		let link = svg.append("g")
+			.attr("stroke", "#999")
+			.attr("stroke-opacity", 0.6)
+			.selectAll("line") // 用line元素来绘制
+			.data(graph.links) // 绑定json文件中的links数据
+			.join("line")
+			.attr("stroke-width", d => Math.sqrt(d.value)) // 连线粗细通过线的value计算
+			.on('mouseover', function (event,d) {
+
+				d3.select(this).transition().attr("stroke-width", 7);
+
+				tooltip.transition()
+					.duration(250) // 设置transition效果的速度，默认为500ms
+					.style("opacity", 1);
+
+				tooltip.html(
+					"<p> Source: " + d.source.id + "<br>"
+					+ 'Target: ' + d.target.id + "<br>"
+					+ 'Relation: ' + d.relation + '<br>'
+					+ 'Time(ms): ' + d.date + "</p>"
+				)
+					// 设置tooltip距离鼠标的相对位置
+					.style("left", (event.pageX + 15) + "px")
+					.style("top", (event.pageY - 28) + "px");
+
+			})
+			.on('mouseout', function (event,d) {
+
+				d3.select(this).transition().attr("stroke-width", d => Math.sqrt(d.value));
+
+				tooltip.transition()
+					.duration(250)
+					.style("opacity", 0);
+
+			});
+		
+		let id = 0
+		let groupText = ['Normal User','Abnormal User']
+		// 定义人物节点信息
+		let node = svg.append("g")
+			.attr("stroke", "#fff")
+			.attr("stroke-width", 1.5)
+			.selectAll("circle") // 人物节点通过圆来绘制 
+			.data(graph.nodes)// 为人物节点绑定nodes数据
+			.join("circle")
+			.attr("r", 5)// 设置节点半径
+			.attr("fill", function(d) { return color(d.group); })  // 设置节点的填充色，通过节点的group属性来计算节点的填充颜色
+			.attr("id",d => "node" + d.id)
+			.attr("class",d => `node${d.id}`)
+			.call(
+				d3.drag()
+				.on('start',dragstarted)
+				.on('drag',dragged)
+				.on('end',dragended)
+				)
+			.on('mouseover', function (event,d) {
+
+				d3.select(this).transition().attr("r", 10);
+
+				tooltip.transition()
+					.duration(250) // 设置transition效果的速度，默认为500ms
+					.style("opacity", 1);
+
+				tooltip.html(
+					"<p> User Id: " + d.id + "<br>"
+					+ 'Sex: ' + d.sex + "<br>"
+					+ 'Fans Count: ' + d.fans_count + '<br>'
+					+ 'Follows Count: ' + d.follows_count + '<br>'
+					+ 'Weibos Count: ' + d.weibos_count + '<br>'
+					+ 'Group: ' + groupText[d.group] + "</p>"
+				)
+					// 设置tooltip距离鼠标的相对位置
+					.style("left", (event.pageX + 15) + "px")
+					.style("top", (event.pageY - 28) + "px");
+
+			})
+			.on('mouseout', function (event,d) {
+
+				d3.select(this).transition().attr("r", 5);
+
+				tooltip.transition()
+					.duration(250)
+					.style("opacity", 0)
+
+			})
+			
+			.on('click', function (event,d) {
+
+				d3.selectAll(`#${"path"+d.id}`).attr('stroke', "pink")
+				d3.selectAll(`#${"path"+d.id}`).attr('stroke-width', 10)
+
+			}
+			);
+		// 定义simulation内部计时器tick每次结束时的动作
+		simulation.on("tick", () => {
+
+			// 每次tick计时到时，连接线的响应动作
+			link
+				.attr("x1", d => d.source.x)
+				.attr("y1", d => d.source.y)
+				.attr("x2", d => d.target.x)
+				.attr("y2", d => d.target.y);
+
+			// 每次tick计时到时，节点的响应动作
+			node
+				.attr("cx", d => d.x)
+				.attr("cy", d => d.y);
+			
+			// 每次tick计时到时，凸壳的响应动作
+			hulls
+				.data(convexHulls(graph.nodes))
+				.attr("d", drawCluster);
+			});
+
+		// 定义图例组件
+		let legend = svg.append("g")
+			.attr("id", "legend");
+
+		// 定义图例中的色块（此处为圆形）
+		legend.selectAll("mydots")
+			.data(d3.range(0,2))
+			.enter()
+			.append("circle")
+			.attr("cx", 50)
+			.attr("cy", function(d,i){ return 200 + i*25}) 
+			.attr("r", 5)
+			.style("fill", function(d){ return color(d)})
+			.style("opacity",0.8);
+
+		// 在图例中添加文本标签
+		legend.selectAll("mylabels")
+			.data(d3.range(0,2))
+			.enter()
+			.append("text")
+			.attr("x", 70)
+			.attr("y", function(d,i){ return 200 + i*25}) 
+			.style("fill", function(d){ return color(d)})
+			.style("opacity",0.8)
+			.text(function(d){ return groupText[d]})
+			.attr("text-anchor", "left")
+			.style("alignment-baseline", "middle")
+
+	
+		// 定义开始拖拽节点时的动作，注意v6版本是通过event返回的函数参数来处理的 
+		function dragstarted(event) {
+			
+			// 当开始拖动时，restart()方法重新启动模拟器的内部计时器并返回模拟器，
+			// alpha将保持在0.3左右，使模拟不断移动
+			if (!event.active) simulation.alphaTarget(0.3).restart();
+			event.subject.fx = event.subject.x;
+			event.subject.fy = event.subject.y;
+		}
+
+		// 定义拖拽中的动作
+		function dragged(event) {
+			event.subject.fx = event.x;
+			event.subject.fy = event.y;
+		}
+
+		// 定义拖拽结束的动作
+		// 在拖动结束时，alphaTarget被设置回0，因此再次稳定下来，这就是阻力相互作用后力返回的原因
+		function dragended(event) {
+			if (!event.active) simulation.alphaTarget(0);
+			event.subject.fx = null;
+			event.subject.fy = null;
+		}
+
+		// ******************************************************************************************************
+
+		// 创建一个辅助用的横轴比例尺，用来确定实际每条纵轴的位置
+		let scaleX = d3.scalePoint()
+  	      .domain(dimensions)
+  	      .range([0, width2 - 2 * margin2]);
+		
+		// 对数据的每一个维度，都创建一个相应的比例尺，并存放在scaleY中
+  		let scaleY = {}
+
+  		dimensions.forEach(function (d) {
+    		scaleY[d] = d3.scaleLinear()
+            	.domain([d3.min(graph.nodes.map(e => e[d])), d3.max(graph.nodes.map(e => e[d]))])
+            	.range([height2 - margin2, 0])
+    	});
+
+		// 创建一个折线路径生成器
+		let lineGenerator = d3.line();
+
+		// 绘制折线
+		group2
+		.append("g")
+		.selectAll(".paths") // 绑定数据并创建path元素
+		.data(graph.nodes)
+		.enter()
+		.append("path")
+		.attr("class", "path")
+		.attr("id",d => "path" + d.id)
+		.attr("d", d => lineGenerator(  // 利用刚才定义的路径生成器pathGenerator设置path的d属性
+			dimensions.map(function (p) {
+				return [scaleX(p), scaleY[p](d[p])];
+			})
+		))
+		.attr("fill", "none")
+		.attr("class", d => `path${d.group}`) // 将每条折线的class设为其对应的品种
+		.attr("stroke", d => color(d.group))
+		.attr("stroke-width", 2)
+		.attr("opacity", 1)
+		.on("mouseover", function () {
+			d3.select(this).transition().attr('stroke-width',5).attr("opacity",1)  // 鼠标移到折线上面时变粗
+		})
+		.on("mouseout", function () {
+			d3.select(this).transition()
+			.attr("stroke", d => color(d.group))
+			.attr('stroke-width',2).attr("opacity",1)  // 鼠标离开折线时变细
+		})
+		.on("click", function (event, d){
+			d3
+			.selectAll(`#${"node"+d.id}`)
+			.transition().attr("r",10)
+		});
+
+		// 各个坐标轴的容器，每一个与一个dimension绑定
+		let Ys = group2
+			.selectAll(".dimension")
+			.data(dimensions)
+			.enter()
+			.append("g")
+			.attr("class", "dimension")
+			.attr("transform", d => `translate(${scaleX(d)},0)`);
+
+		// 绘制各轴
+		Ys
+		.append("g")
+		.each(function (d) {
+			d3.select(this).call(d3.axisLeft(scaleY[d]));
+		});
+
+		// 为各轴注明属性名称
+		Ys
+		.append("text")
+		.attr("class","texts")
+		.attr("x", -0.03 * width2) // 稍作移动以对齐
+		.attr("y", -0.03 * height2)
+		.text(d => d)
+		// 一个小trick，效果相当于给刻度文字加上白色描边，让显示更清晰
+		.attr("fill", "black")
+		.attr("stroke-width", 0.5)
+		.attr("stroke-linejoin", "round")
+		.attr("stroke", "lightgrey");
+		
+
+		// 移动group内所有元素，空出留白
+		group2.attr("transform", `translate(${margin2}, ${margin2})`);
+
+		let flag = [true, true, true];
+		// 绘制图例前的圆形图标
+		legend2
+		.selectAll(".circles")
+		.data(d3.range(0,2))
+		.enter()
+		.append("circle")
+		.attr("class","circle")
+		.attr("fill", d => color(d))
+		.attr('cx', 10)
+		.attr('cy', (d, i) => i * 25 + 30)
+		.attr('r', 8)
+		.on("mouseover", function () {
+			d3.select(this).transition().attr('r',12)   // 鼠标移到圆圈上面变大
+		})
+		.on("mouseout", function () {
+			d3.select(this).transition().attr('r',8)   // 鼠标离开圆圈时变小
+		})
+		.on("click", function (event, d) {
+			if (flag[d]) { // 若该类别未被隐藏，隐藏
+                d3.select(this).attr('fill', 'lightgrey') // 把图标变为灰色
+                d3.selectAll(`.path${d}`).attr('stroke', 'lightgrey') // 把对应折线变为灰色
+                flag[d] = !flag[d] // 更新状态
+                }
+            else { // 若该类别已被隐藏，还原
+                d3.select(this).attr('fill', e => color(e))
+                d3.selectAll(`.path${d}`).attr('stroke', e => color(e.group))
+                flag[d] = !flag[d]
+			}
+		});
+
+		// 绘制图例中的文字
+		legend2.selectAll(".texts")
+		.data(groupText)
+		.enter()
+		.append("text")
+		.attr("class","texts")
+		.attr('x', 30)
+		.attr('y', (d, i) => i * 25 + 35)
+		.text(d => d);
+
+		// 将图例移动到合适位置
+		legend2.attr('transform', `translate(${width2},${margin2})`);
+  	
+	});
+
+</script>
+</body>
